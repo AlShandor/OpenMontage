@@ -118,9 +118,13 @@ class GoogleImagen(BaseTool):
                     "imagen-4.0-generate-001",
                     "imagen-4.0-fast-generate-001",
                     "imagen-4.0-ultra-generate-001",
+                    "gemini-3.1-flash-lite-image",
+                    "gemini-3.1-flash-image",
+                    "gemini-3-pro-image",
+                    "gemini-2.5-flash-image",
                 ],
                 "default": "imagen-4.0-generate-001",
-                "description": "Imagen model variant",
+                "description": "Imagen or Gemini Nano Banana image model variant",
             },
             "number_of_images": {
                 "type": "integer",
@@ -157,6 +161,8 @@ class GoogleImagen(BaseTool):
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
         model = inputs.get("model", "imagen-4.0-generate-001")
         n = inputs.get("number_of_images", 1)
+        if model.startswith("gemini-"):
+            return 0.02 * n
         if "ultra" in model:
             return 0.06 * n
         if "fast" in model:
@@ -215,6 +221,67 @@ class GoogleImagen(BaseTool):
             aspect_ratio = "1:1"
 
         number_of_images = inputs.get("number_of_images", 1)
+
+        if model.startswith("gemini-"):
+            if not api_key:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Gemini Nano Banana image models require GOOGLE_API_KEY "
+                        "or GEMINI_API_KEY for the Gemini Interactions API."
+                    ),
+                )
+            if number_of_images != 1:
+                logger.info(
+                    "google_imagen: Gemini image path supports one image per call; requested %s",
+                    number_of_images,
+                )
+            try:
+                from google import genai
+
+                client = genai.Client(api_key=api_key)
+                interaction = client.interactions.create(
+                    model=model,
+                    input=[
+                        {
+                            "type": "text",
+                            "text": (
+                                prompt
+                                + f"\n\nRender as a {aspect_ratio} landscape frame. "
+                                "Return one finished image only."
+                            ),
+                        }
+                    ],
+                )
+                generated_image = getattr(interaction, "output_image", None)
+                if not generated_image or not getattr(generated_image, "data", None):
+                    return ToolResult(
+                        success=False,
+                        error="No output_image returned from Gemini Interactions API",
+                    )
+
+                image_bytes = base64.b64decode(generated_image.data)
+                output_path = Path(inputs.get("output_path", "generated_image.png"))
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(image_bytes)
+            except Exception as e:
+                return ToolResult(success=False, error=f"Gemini image generation failed: {e}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "provider": "google_imagen",
+                    "model": model,
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "output": str(output_path),
+                    "images_generated": 1,
+                },
+                artifacts=[str(output_path)],
+                cost_usd=self.estimate_cost(inputs),
+                duration_seconds=round(time.time() - start, 2),
+                model=model,
+            )
 
         parameters: dict[str, Any] = {
             "sampleCount": number_of_images,

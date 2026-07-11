@@ -97,3 +97,5 @@ venv/
 
 # Backlot local cache (thumbnails)
 .backlot/
+
+assets/*
